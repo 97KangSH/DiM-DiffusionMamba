@@ -8,8 +8,8 @@ ADD control .
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install --yes equivs && \
     equivs-build control && \
-    dpkg -i libcuda1-dummy_12.2_all.deb && \
-    rm control libcuda1-dummy_12.2_all.deb && \
+    dpkg -i libcuda1-dummy_11.8_all.deb && \
+    rm control libcuda1-dummy_11.8_all.deb && \
     apt-get remove --yes --purge --autoremove equivs && \
     rm -rf /var/lib/apt/lists/*
 
