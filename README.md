@@ -136,3 +136,17 @@ accelerate launch --multi_gpu --num_processes 8 --mixed_precision bf16 ./train_l
 }
 ```
 
+# Testing For Myself
+큰 데이터셋으로 확인하는 것 보다는 32x32x3 크기인 cifar dataset으로 학습 코드 점검
+```
+# Cifar 32x32 Small
+accelerate launch --mixed_precision fp16 ./train.py --config=configs/cifar10_S_DiM.py
+```
+현재는 다중 gpu가 아닌, 단일 gpu를 활용하고 있기 때문에,  --multi_gpu --num_processes 8 flag는 사용하지 않는다.  
+향후, 다중 gpu를 사용하게 된다면 아래와 같이 학습을 진행하면된다.
+```
+accelerate launch --multi_gpu --num_processes 8 --mixed_precision fp16 ./train.py --config=configs/cifar10_S_DiM.py
+```
+## 알아낸 것 by GPT
+1. --multi_gpu flag는 다중 GPU가 있을 때만 활용할 것.
+2. accelerate에서 --num_processes는 GPU 수와 동일하게 설정할 것.
