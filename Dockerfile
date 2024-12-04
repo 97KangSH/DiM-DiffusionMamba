@@ -22,7 +22,7 @@ RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y curl sudo gnupg wget software-properties-common libgl1-mesa-dev && \
     rm -rf /var/lib/apt/lists/*
 
-COPY . /root/
+COPY . /root/DIM
 
 # CUDA 설치 파일 다운로드 및 설치
 RUN wget https://developer.download.nvidia.com/compute/cuda/11.8.0/local_installers/cuda_11.8.0_520.61.05_linux.run && \

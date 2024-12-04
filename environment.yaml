@@ -57,3 +57,4 @@ dependencies:
       - wandb
       - causal-conv1d==1.2.0.post2
       - galore-torch
+      - huggingface_hub==0.25
