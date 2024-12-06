@@ -197,3 +197,4 @@ pyrightconfig.json
 ### asset directory ###
 assets/*
 !assets/*.png
+workdir/*
