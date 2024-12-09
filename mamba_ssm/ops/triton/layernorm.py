@@ -169,8 +169,8 @@ def _layer_norm_fwd(
             eps,
             is_rms_norm,
             BLOCK_N,
-            residual is not None,
-            residual_out is not None,
+            residual is not None,       # 처음에는 False, 다음부터는 True
+            residual_out is not None,   # 처음에는 None이므로 False, 다음부터는 True
             bias is not None,
         )
     # residual_out is None if residual is None and residual_dtype == input_dtype
@@ -408,6 +408,7 @@ class LayerNormFn(torch.autograd.Function):
             if residual is not None
             else (torch.float32 if residual_in_fp32 else None)
         )
+        # residual_out : x
         y, mean, rstd, residual_out = _layer_norm_fwd(
             x, weight, bias, eps, residual, residual_dtype=residual_dtype, is_rms_norm=is_rms_norm
         )
