@@ -8,6 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from collections import deque
+
 from timm.models.layers import DropPath
 
 from einops import rearrange, repeat
@@ -53,6 +55,7 @@ class HTM(nn.Module):
         dtype=None,
         num_module=1, # value k
         aggregate='concat_linear', # 'sum', 'concat_linear'
+        log=False,
         **kwargs,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
@@ -67,7 +70,7 @@ class HTM(nn.Module):
         self.layer_idx = layer_idx
         self.num_module = num_module
         self.aggregate = aggregate
-
+        self.log = log
         self.in_proj = nn.Linear(self.d_model, self.d_inner * 2, bias=bias, **factory_kwargs)
 
         # HTM block convolution initialization - by KANG
@@ -81,7 +84,8 @@ class HTM(nn.Module):
             **factory_kwargs,
         )
         # HTM block deep copy - by KANG
-        print(num_module)
+        if log:
+            print(num_module)
         self.conv1ds = nn.ModuleList([deepcopy(conv1d) for k in range(num_module)])
 
         self.activation = "silu"
@@ -146,11 +150,12 @@ class HTM(nn.Module):
         hidden_states: (B, T, D)
         Returns: same shape as hidden_states
         """
-        print('HTM_Input.shape: ')
         
         batch, seqlen, dim = hidden_states.shape
-        print(hidden_states.shape)
-        print(f"torch.Size([B,  T,  D])")
+        if self.log:
+            print('##### HTM_Input.shape #####')
+            print(hidden_states.shape)
+            print(f"torch.Size([B,  T,  D])")
         # print(f'B: {batch}, T: {seqlen} D: {dim}')
         conv_state, ssm_state = None, None
         if inference_params is not None:
@@ -166,10 +171,11 @@ class HTM(nn.Module):
             "d (b l) -> b d l",
             l=seqlen,
         )
-        print('xz.shape: ')
-        print(xz.shape)
-        print(f"torch.Size([B,E*2,  T])")
-        print(f"E: {xz.shape[1]//2}")
+        if self.log:
+            print('##### xz.shape #####')
+            print(xz.shape)
+            print(f"torch.Size([B,E*expand*2,  T])")
+            print(f"E_expand: {xz.shape[1]//2}")
         # print(f'B: {xz.shape[0]}, E*2: {xz.shape[1]}, L/T: {xz.shape[2]} ')
         if self.in_proj.bias is not None:
             xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
@@ -194,33 +200,37 @@ class HTM(nn.Module):
                 )
                 out = rearrange(out, "b d l -> b l d")
                 outputs.append(out)
-            print('y.shape: ')
-            print(outputs[0].shape)
-            print(f"torch.Size([B,  T,E*2])")
+            if self.log:
+                print('##### y.shape #####')
+                print(outputs[0].shape)
+                print(f"torch.Size([B,  T,E*expand*2])")
 
             # print(f'B: {outputs[0].shape[0]}, L/T: {outputs[0].shape[1]}, E: {outputs[0].shape[2]} ')
             if self.aggregate == 'sum':
-                print('sum')
+                if self.log:
+                    print('sum')
                 aggregated = torch.stack(outputs, dim=0).sum(dim=0)
             elif self.aggregate == 'concat_linear':
-                print('concat_linear')
                 aggregated = torch.cat(outputs, dim=-1)
-                print(aggregated.shape)
-                print(f"torch.Size([B,  T,E*{self.num_module}])")
+                if self.log:
+                    print('##### concat_linear #####')
+                    print(aggregated.shape)
+                    print(f"torch.Size([B,  T,E*{self.num_module}])")
                 aggregated = self.aggregate_linear(aggregated)
             
             out = self.out_proj(aggregated)
 
-            print('out.shape: ')
-            print(out.shape)
-            print(f"torch.Size([B,  T,  D])")
+            if self.log:
+                print('##### out.shape #####')
+                print(out.shape)
+                print(f"torch.Size([B,  T,  D])")
             return out
         else:
             x, z = xz.chunk(2, dim=1)
-            print('x.shape',x.shape)
-            
-            print('z.shape',z.shape)
-            print(f'B: {x.shape[0]}, E: {x.shape[1]}, L/T: {x.shape[2]} ')
+            if self.log:
+                print('x.shape',x.shape)
+                print('z.shape',z.shape)
+                print(f'B: {x.shape[0]}, E: {x.shape[1]}, L/T: {x.shape[2]} ')
             outputs = []
             for dt_proj, conv1d, A_log, D in zip(self.dt_projs, self.conv1ds, self.A_logs, self.Ds):
                 A = -torch.exp(A_log.float())  # (d_inner, d_state)
@@ -270,22 +280,27 @@ class HTM(nn.Module):
                 y = rearrange(y, "b d l -> b l d")
                 outputs.append(y)
 
-            print('y.shape: ', outputs[0].shape)
-            print(f'B: {outputs[0].shape[0]}, L/T: {outputs[0].shape[1]}, E: {outputs[0].shape[2]} ')
+            if self.log:
+                print('y.shape: ', outputs[0].shape)
+                print(f'B: {outputs[0].shape[0]}, L/T: {outputs[0].shape[1]}, E: {outputs[0].shape[2]} ')
             if self.aggregate == 'sum':
-                print('sum')
+                if self.log:
+                    print('sum')
                 aggregated = torch.stack(outputs, dim=0).sum(dim=0)
             elif self.aggregate == 'concat_linear':
-                print('concat_linear')
+                
                 aggregated = torch.cat(outputs, dim=-1)
-                print(aggregated.shape)
+                if self.log:
+                    print('concat_linear')
+                    print(aggregated.shape)
                 
                 aggregated = self.aggregate_linear(aggregated)
             
             out = self.out_proj(aggregated)
 
-            print('out.shape: ', out.shape)
-            print(f'B: {out.shape[0]}, L/T: {out.shape[1]}, E: {out.shape[2]} ')
+            if self.log:
+                print('out.shape: ', out.shape)
+                print(f'B: {out.shape[0]}, L/T: {out.shape[1]}, E: {out.shape[2]} ')
             return out
 
     def step(self, hidden_states, conv_state, ssm_state):
@@ -393,7 +408,8 @@ class HTM(nn.Module):
 class BSM(nn.Module):
     def __init__(
         self,
-        d_model,
+        d_temporal=2,     # latent [2, 256] 에서 2를 맡고 있는 녀석이다.
+        d_model=256,
         d_state=16,
         d_conv=4,
         expand=2,
@@ -416,27 +432,31 @@ class BSM(nn.Module):
         dtype=None,
         if_divide_out=False,
         init_layer_scale=None,
+        log=False,
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
+        self.d_temporal = d_temporal
         self.d_model = d_model
         self.d_state = d_state
         self.d_conv = d_conv
         self.expand = expand
-        self.d_inner = int(self.expand * self.d_model)
-        self.dt_rank = math.ceil(self.d_model / 16) if dt_rank == "auto" else dt_rank
+        self.d_inner = int(self.expand * self.d_temporal)
+        self.dt_rank = math.ceil(self.d_temporal / 16) if dt_rank == "auto" else dt_rank
         self.use_fast_path = use_fast_path
         self.layer_idx = layer_idx
         self.if_divide_out = if_divide_out
         self.residual_in_fp32 = residual_in_fp32
-
         self.init_layer_scale = init_layer_scale
+        self.log = log
+
         if init_layer_scale is not None:
-            self.gamma = nn.Parameter(init_layer_scale * torch.ones((d_model)), requires_grad=True)
+            self.gamma = nn.Parameter(init_layer_scale * torch.ones((self.d_temporal)), requires_grad=True)
 
-        self.norm  = nn.LayerNorm(self.d_model)
-
-        self.in_proj = nn.Linear(self.d_model, self.d_inner * 2, bias=bias, **factory_kwargs)
+        self.norm = (nn.LayerNorm if not rms_norm else RMSNorm)(
+            self.d_temporal, eps=norm_epsilon, **factory_kwargs
+        )
+        self.in_proj = nn.Linear(self.d_temporal, self.d_inner * 2, bias=bias, **factory_kwargs)
 
         self.conv1d = nn.Conv1d(
             in_channels=self.d_inner,
@@ -519,12 +539,12 @@ class BSM(nn.Module):
         self.D_b = nn.Parameter(torch.ones(self.d_inner, device=device))  # Keep in fp32
         self.D_b._no_weight_decay = True
 
-        self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
+        self.out_proj = nn.Linear(self.d_inner, self.d_temporal, bias=bias, **factory_kwargs)
 
         self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0. else nn.Identity()
 
         self.norm_f = (nn.LayerNorm if not rms_norm else RMSNorm)(
-            self.d_model, eps=norm_epsilon, **factory_kwargs
+            self.d_temporal, eps=norm_epsilon, **factory_kwargs
         )
 
     def forward(self, hidden_states, inference_params=None):
@@ -532,12 +552,20 @@ class BSM(nn.Module):
         hidden_states: (B, T, D)
         Returns: same shape as hidden_states
         """
-        batch, seqlen, dim = hidden_states.shape
-        print("BSM_Input.shape")
-        print(hidden_states.shape)
-        print(f"torch.Size([B,  T,  D])")
 
-        print("여기에서 Rearrange가 들어가야 함.(아직)")
+        
+        if self.log:
+            print("##### BSM_Input.shae#####")
+            print(hidden_states.shape)
+            print(f"torch.Size([B,  T,  D])")
+
+        hidden_states = rearrange(hidden_states, "b l d -> b d l")
+        batch, seqlen, dim = hidden_states.shape
+        if self.log:
+            print("##### Rearrange.shape#####")
+            print(hidden_states.shape)
+            print(f"torch.Size([B,  D,  T])")
+
         init_fused_add_norm_fn = rms_norm_fn if isinstance(self.norm, RMSNorm) else layer_norm_fn
         # residual: hidden_state
         hidden_states, residual = init_fused_add_norm_fn(
@@ -562,14 +590,21 @@ class BSM(nn.Module):
             "d (b l) -> b d l",
             l=seqlen,
         )
+        # xz = rearrange(
+        #     self.in_proj.weight @ rearrange(hidden_states, "b d l -> l (b d)"),
+        #     "l (b d) -> b l d",
+        #     l=seqlen,
+        # )
         if self.in_proj.bias is not None:
             xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), "d -> d 1")
+            # xz = xz + rearrange(self.in_proj.bias.to(dtype=xz.dtype), "l -> l 1")
         
-        print('xz.shape: ')
-        print(xz.shape)
-        print(f"torch.Size([B,E*2,  T])")
-        print(f"E: {xz.shape[1]//2}")
-        print("[B, T*2, E]가 되어야 함 (아직)")
+        if self.log:
+            print('##### xz.shape #####')
+            print(xz.shape)
+            print(f"torch.Size([B,T*expand*2,  E])")
+            print(f"T_expand: {xz.shape[1]//2}")
+        # print("[B, T*2, E]가 되어야 함 (아직)")
         A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
         # In the backward pass we write dx and dz next to each other to avoid torch.cat
         if self.use_fast_path and inference_params is None:  # Doesn't support outputting the states
@@ -587,9 +622,10 @@ class BSM(nn.Module):
                 delta_bias=self.dt_proj.bias.float(),
                 delta_softplus=True,
             )
-            print('forward.shape: ')
-            print(out.shape)
-            print(f"torch.Size([B,  E,  T])")
+            if self.log:
+                print('##### forward.shape #####')
+                print(out.shape)
+                print(f"torch.Size([B,  T,  E])")
             out_b = mamba_inner_fn_no_out_proj(
                 xz.flip([-1]),
                 self.conv1d_b.weight,
@@ -603,9 +639,10 @@ class BSM(nn.Module):
                 delta_bias=self.dt_proj_b.bias.float(),
                 delta_softplus=True,
             )
-            print('backward.shape: ')
-            print(out.shape)
-            print(f"torch.Size([B,  E,  T])")
+            if self.log:
+                print('##### backward.shape #####')
+                print(out.shape)
+                print(f"torch.Size([B,  T,  E ])")
             # F.linear(rearrange(out_z, "b d l -> b l d"), out_proj_weight, out_proj_bias)
             if not self.if_divide_out:
                 out = F.linear(rearrange(out + out_b.flip([-1]), "b d l -> b l d"), self.out_proj.weight, self.out_proj.bias)
@@ -659,9 +696,11 @@ class BSM(nn.Module):
                 ssm_state.copy_(last_state)
             y = rearrange(y, "b d l -> b l d")
             out = self.out_proj(y)
-        print("Output shape")
-        print(out.shape)
-        print(f"torch.Size([B,  T,  D])")
+        
+        if self.log:
+            print("##### Output shape #####")
+            print(out.shape)
+            print(f"torch.Size([B,  D,  T])")
 
         fused_add_norm_fn = rms_norm_fn if isinstance(self.norm_f, RMSNorm) else layer_norm_fn
         out = fused_add_norm_fn(
@@ -673,10 +712,16 @@ class BSM(nn.Module):
             prenorm=False,
             residual_in_fp32=self.residual_in_fp32,
         )
-        print("After Add residual")
-        print("Output shape")
-        print(out.shape)
-        print(f"torch.Size([B,  T,  D])")
+        if self.log:
+            print("##### After Add residual #####")
+            print(out.shape)
+            print(f"torch.Size([B,  D,  T])")
+
+        out = rearrange(out, "b d l -> b l d")
+        if self.log:
+            print("##### Final_Result #####")
+            print(out.shape)
+            print(f"torch.Size([B,  T,  D])")
 
         if self.init_layer_scale is not None:
                 out = out * self.gamma    
@@ -733,12 +778,12 @@ class BSM(nn.Module):
         device = self.out_proj.weight.device
         conv_dtype = self.conv1d.weight.dtype if dtype is None else dtype
         conv_state = torch.zeros(
-            batch_size, self.d_model * self.expand, self.d_conv, device=device, dtype=conv_dtype
+            batch_size, self.d_temporal * self.expand, self.d_conv, device=device, dtype=conv_dtype
         )
         ssm_dtype = self.dt_proj.weight.dtype if dtype is None else dtype
         # ssm_dtype = torch.float32
         ssm_state = torch.zeros(
-            batch_size, self.d_model * self.expand, self.d_state, device=device, dtype=ssm_dtype
+            batch_size, self.d_temporal * self.expand, self.d_state, device=device, dtype=ssm_dtype
         )
         return conv_state, ssm_state
 
@@ -748,14 +793,14 @@ class BSM(nn.Module):
             batch_shape = (batch_size,)
             conv_state = torch.zeros(
                 batch_size,
-                self.d_model * self.expand,
+                self.d_temporal * self.expand,
                 self.d_conv,
                 device=self.conv1d.weight.device,
                 dtype=self.conv1d.weight.dtype,
             )
             ssm_state = torch.zeros(
                 batch_size,
-                self.d_model * self.expand,
+                self.d_temporal * self.expand,
                 self.d_state,
                 device=self.dt_proj.weight.device,
                 dtype=self.dt_proj.weight.dtype,
@@ -769,3 +814,419 @@ class BSM(nn.Module):
                 conv_state.zero_()
                 ssm_state.zero_()
         return conv_state, ssm_state
+
+
+class MotionMambaBlock(nn.Module):
+    def __init__(
+        self,
+        d_model,
+        d_temporal,
+        d_state=16,
+        d_conv=4,
+        expand=2,
+        dt_rank="auto",
+        dt_min=0.001,
+        dt_max=0.1,
+        dt_init="random",
+        dt_scale=1.0,
+        dt_init_floor=1e-4,
+        drop_rate=0.,
+        drop_path_rate=0.1,
+        norm_epsilon: float = 1e-5, 
+        rms_norm: bool = True, 
+        residual_in_fp32: bool = True,
+        conv_bias=True,
+        bias=False,
+        use_fast_path=True,  # Fused kernel options
+        layer_idx=None,
+        device=None,
+        dtype=None,
+        num_module=1, # value k
+        if_divide_out=False,
+        init_layer_scale=None,
+        aggregate='concat_linear', # 'sum', 'concat_linear'
+        log = False,
+        **kwargs
+    ):
+        factory_kwargs = {"device": device, "dtype": dtype}
+        super().__init__()
+        self.d_model = d_model
+        self.d_state = d_state
+        self.d_conv = d_conv
+        self.expand = expand
+        self.d_inner = int(self.expand * self.d_model)
+        self.dt_rank = math.ceil(self.d_model / 16) if dt_rank == "auto" else dt_rank
+        self.use_fast_path = use_fast_path
+        self.layer_idx = layer_idx
+        self.num_module = num_module
+        self.aggregate = aggregate
+        self.log = log
+
+        self.gate = nn.Linear(
+                self.d_model, self.d_model, bias=True, **factory_kwargs
+            )
+        
+        self.htm = HTM(d_model,
+                       d_state,
+                       d_conv,
+                       expand,
+                       dt_rank,
+                       dt_min,
+                       dt_max,
+                       dt_init,
+                       dt_scale,
+                       dt_init_floor,
+                       conv_bias,
+                       bias,
+                       use_fast_path,
+                       layer_idx,
+                       device,
+                       dtype,
+                       num_module,
+                       aggregate,
+                       log,
+                       **kwargs)
+        
+        self.bsm = BSM(d_temporal,
+                       d_model,
+                       d_state,
+                       d_conv,
+                       expand,
+                       dt_rank,
+                       dt_min,
+                       dt_max,
+                       dt_init,
+                       dt_scale,
+                       dt_init_floor,
+                       drop_rate,
+                       drop_path_rate,
+                       norm_epsilon,
+                       rms_norm,
+                       residual_in_fp32,
+                       conv_bias,
+                       bias,
+                       use_fast_path,
+                       layer_idx,
+                       device,
+                       dtype,
+                       if_divide_out,
+                       init_layer_scale,
+                       log)
+        
+    def forward(self, hidden_states, inference_params=None):
+        """
+
+        hidden_states: (B, T, D)
+        Returns: same shape as hidden_states
+        """
+        
+        batch, seqlen, dim = hidden_states.shape
+        if self.log:
+            print('##### Mamba Block Input.shape #####')
+            print(hidden_states.shape)
+            print(f"torch.Size([B,  T,  D])")
+        # print(f'B: {batch}, T: {seqlen} D: {dim}')
+        gate = self.gate(hidden_states)
+        if self.log:
+            print("##### Gate.shape #####")
+            print(gate.shape)
+            print(f"torch.Size([B,  T,  D])")
+        
+        hidden_states = self.htm(hidden_states)
+        hidden_states = self.bsm(hidden_states)
+        
+        out = hidden_states * gate
+        if self.log:
+            print("##### Final Output.shape #####")
+            print(out.shape)
+            print(f"torch.Size([B,  T,  D])")
+        
+        return out
+
+    def step(self, hidden_states, conv_state, ssm_state):
+        dtype = hidden_states.dtype
+        assert hidden_states.shape[1] == 1, "Only support decoding with 1 token at a time for now"
+        xz = self.in_proj(hidden_states.squeeze(1))  # (B 2D)
+        x, z = xz.chunk(2, dim=-1)  # (B D)
+
+        # Conv step
+        if causal_conv1d_update is None:
+            conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))  # Update state (B D W)
+            conv_state[:, :, -1] = x
+            x = torch.sum(conv_state * rearrange(self.conv1d.weight, "d 1 w -> d w"), dim=-1)  # (B D)
+            if self.conv1d.bias is not None:
+                x = x + self.conv1d.bias
+            x = self.act(x).to(dtype=dtype)
+        else:
+            x = causal_conv1d_update(
+                x,
+                conv_state,
+                rearrange(self.conv1d.weight, "d 1 w -> d w"),
+                self.conv1d.bias,
+                self.activation,
+            )
+
+        x_db = self.x_proj(x)  # (B dt_rank+2*d_state)
+        dt, B, C = torch.split(x_db, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+        # Don't add dt_bias here
+        dt = F.linear(dt, self.dt_proj.weight)  # (B d_inner)
+        A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
+
+        # SSM step
+        if selective_state_update is None:
+            # Discretize A and B
+            dt = F.softplus(dt + self.dt_proj.bias.to(dtype=dt.dtype))
+            dA = torch.exp(torch.einsum("bd,dn->bdn", dt, A))
+            dB = torch.einsum("bd,bn->bdn", dt, B)
+            ssm_state.copy_(ssm_state * dA + rearrange(x, "b d -> b d 1") * dB)
+            y = torch.einsum("bdn,bn->bd", ssm_state.to(dtype), C)
+            y = y + self.D.to(dtype) * x
+            y = y * self.act(z)  # (B D)
+        else:
+            y = selective_state_update(
+                ssm_state, x, dt, A, B, C, self.D, z=z, dt_bias=self.dt_proj.bias, dt_softplus=True
+            )
+
+        out = self.out_proj(y)
+        return out.unsqueeze(1), conv_state, ssm_state
+
+    
+    def to(self, *args, **kwargs):
+        # 기존 `to` 메서드 호출
+        super_result = super().to(*args, **kwargs)
+        
+        # 추가 기능
+        if "cuda" in str(args[0]):  # GPU로 이동하는 경우 추가 작업 수행
+            self.htm.to("cuda")
+            self.bsm.to("cuda")
+
+        return super_result
+
+
+class MotionMamba(nn.Module):
+    def __init__(
+        self,
+        d_model,
+        d_temporal,
+        d_state=16,
+        d_conv=4,
+        expand=2,
+        nhead = 4,
+        dt_rank="auto",
+        dt_min=0.001,
+        dt_max=0.1,
+        dt_init="random",
+        dt_scale=1.0,
+        dt_init_floor=1e-4,
+        drop_rate=0.,
+        drop_path_rate=0.1,
+        norm_epsilon: float = 1e-5, 
+        rms_norm: bool = True, 
+        residual_in_fp32: bool = True,
+        conv_bias=True,
+        bias=False,
+        use_fast_path=True,  # Fused kernel options
+        layer_idx=None,
+        device=None,
+        dtype=None,
+        num_layer=1, # value k
+        if_divide_out=False,
+        init_layer_scale=None,
+        aggregate='concat_linear', # 'sum', 'concat_linear'
+        log = False,
+        **kwargs
+    ):
+        factory_kwargs = {"device": device, "dtype": dtype}
+        super().__init__()
+        self.d_model = d_model
+        self.d_temporal = d_temporal
+        self.d_state = d_state
+        self.d_conv = d_conv
+        self.expand = expand
+        self.d_inner = int(self.expand * self.d_model)
+        self.dt_rank = math.ceil(self.d_model / 16) if dt_rank == "auto" else dt_rank
+        self.dt_min = dt_min
+        self.dt_max = dt_max
+        self.dt_init = dt_init
+        self.dt_scale = dt_scale
+        self.dt_init_floor = dt_init_floor
+        self.drop_rate = drop_rate
+        self.drop_path_rate = drop_path_rate
+        self.rmsnorm = rms_norm
+        self.residual_in_fp32 = residual_in_fp32
+        self.conv_bias = conv_bias
+        self.bias = bias
+        self.use_fast_path = use_fast_path
+        self.layer_idx = layer_idx
+        self.num_layer = num_layer
+        self.aggregate = aggregate
+        self.if_divide_out = if_divide_out
+        self.init_layer_scale = init_layer_scale
+        
+        self.norms = nn.ModuleList(
+            [(nn.LayerNorm if not rms_norm else RMSNorm)(self.d_model, eps=norm_epsilon, **factory_kwargs) for _ in range(self.num_layer)]
+        )
+
+        self.encs = nn.ModuleList(
+            [MotionMambaBlock(
+                d_model,
+                d_temporal,
+                d_state,
+                d_conv,
+                expand,
+                dt_rank,
+                dt_min,
+                dt_max,
+                dt_init,
+                dt_scale,
+                dt_init_floor,
+                drop_rate,
+                drop_path_rate,
+                norm_epsilon,
+                rms_norm,
+                residual_in_fp32,
+                conv_bias,
+                bias,
+                use_fast_path,
+                layer_idx,
+                device,
+                dtype,
+                2*k-1,
+                if_divide_out,
+                init_layer_scale,
+                aggregate,
+                log,
+                **kwargs
+
+            ) for k in range(self.num_layer, 0, -1)]
+        )
+        
+        self.mixer = nn.MultiheadAttention(self.d_model, nhead, dropout=drop_path_rate)
+        
+        self.decs = nn.ModuleList(
+            [MotionMambaBlock(
+                d_model,
+                d_temporal,
+                d_state,
+                d_conv,
+                expand,
+                dt_rank,
+                dt_min,
+                dt_max,
+                dt_init,
+                dt_scale,
+                dt_init_floor,
+                drop_rate,
+                drop_path_rate,
+                norm_epsilon,
+                rms_norm,
+                residual_in_fp32,
+                conv_bias,
+                bias,
+                use_fast_path,
+                layer_idx,
+                device,
+                dtype,
+                2*k-1,
+                if_divide_out,
+                init_layer_scale,
+                aggregate,
+                log,
+                **kwargs
+
+            ) for k in range(1, self.num_layer+1)]
+        )
+
+    def forward(self, input, context=None, inference_params=None):
+        """
+
+        hidden_states: (B, T, D)
+        Returns: same shape as hidden_states
+        """
+                
+        batch, seqlen, dim = input.shape
+        residuals = deque()
+
+        hidden_state = input
+
+        # Run Motion Mamba Encoder Blocks
+        for enc in self.encs:
+            hidden_state = enc(hidden_state)
+            residuals.append(hidden_state)
+
+        # Run Transformer Mixer Block
+        if context:
+            hidden_state = self.mixer(query = hidden_state, key = context, value = context)[0]
+        else:
+            # self-attention
+            out = self.mixer(query = hidden_state, key = hidden_state, value = hidden_state)[0]
+
+        # Run Motion Mamba Decoder Blocks
+        for dec in self.decs:
+            out = out + residuals.pop()
+            out = dec(out)
+        
+        assert not residuals, f"Residuals is not empty: {list(residuals)}"
+
+        return out
+
+
+    def step(self, hidden_states, conv_state, ssm_state):
+        dtype = hidden_states.dtype
+        assert hidden_states.shape[1] == 1, "Only support decoding with 1 token at a time for now"
+        xz = self.in_proj(hidden_states.squeeze(1))  # (B 2D)
+        x, z = xz.chunk(2, dim=-1)  # (B D)
+
+        # Conv step
+        if causal_conv1d_update is None:
+            conv_state.copy_(torch.roll(conv_state, shifts=-1, dims=-1))  # Update state (B D W)
+            conv_state[:, :, -1] = x
+            x = torch.sum(conv_state * rearrange(self.conv1d.weight, "d 1 w -> d w"), dim=-1)  # (B D)
+            if self.conv1d.bias is not None:
+                x = x + self.conv1d.bias
+            x = self.act(x).to(dtype=dtype)
+        else:
+            x = causal_conv1d_update(
+                x,
+                conv_state,
+                rearrange(self.conv1d.weight, "d 1 w -> d w"),
+                self.conv1d.bias,
+                self.activation,
+            )
+
+        x_db = self.x_proj(x)  # (B dt_rank+2*d_state)
+        dt, B, C = torch.split(x_db, [self.dt_rank, self.d_state, self.d_state], dim=-1)
+        # Don't add dt_bias here
+        dt = F.linear(dt, self.dt_proj.weight)  # (B d_inner)
+        A = -torch.exp(self.A_log.float())  # (d_inner, d_state)
+
+        # SSM step
+        if selective_state_update is None:
+            # Discretize A and B
+            dt = F.softplus(dt + self.dt_proj.bias.to(dtype=dt.dtype))
+            dA = torch.exp(torch.einsum("bd,dn->bdn", dt, A))
+            dB = torch.einsum("bd,bn->bdn", dt, B)
+            ssm_state.copy_(ssm_state * dA + rearrange(x, "b d -> b d 1") * dB)
+            y = torch.einsum("bdn,bn->bd", ssm_state.to(dtype), C)
+            y = y + self.D.to(dtype) * x
+            y = y * self.act(z)  # (B D)
+        else:
+            y = selective_state_update(
+                ssm_state, x, dt, A, B, C, self.D, z=z, dt_bias=self.dt_proj.bias, dt_softplus=True
+            )
+
+        out = self.out_proj(y)
+        return out.unsqueeze(1), conv_state, ssm_state
+    
+    def to(self, *args, **kwargs):
+        # 기존 `to` 메서드 호출
+        super_result = super().to(*args, **kwargs)
+        
+        # 추가 기능
+        if "cuda" in str(args[0]):  # GPU로 이동하는 경우 추가 작업 수행
+            for k in range(self.num_layer):
+                self.encs[k].to("cuda")
+                self.decs[k].to("cuda")
+
+        return super_result
+    
